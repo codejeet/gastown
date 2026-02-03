@@ -1,0 +1,64 @@
+# Bugfix Formula
+# Quick workflow for fixing bugs
+
+[formula]
+name = "bugfix"
+description = "Quick bugfix workflow"
+version = "1.0"
+
+[variables]
+title = { required = true, description = "Bug description" }
+severity = { required = false, default = "medium" }
+
+[[steps]]
+id = "investigate"
+title = "Investigate: {{title}}"
+role = "polecat"
+instructions = """
+Investigate the bug: {{title}}
+
+1. Reproduce the issue
+2. Identify root cause
+3. Document findings
+4. Propose fix approach
+"""
+status = "ready"
+
+[[steps]]
+id = "fix"
+title = "Fix: {{title}}"
+role = "polecat"
+depends_on = ["investigate"]
+instructions = """
+Apply the fix.
+
+1. Implement the minimal fix
+2. Add regression test
+3. Verify the fix resolves the issue
+4. Check for side effects
+"""
+status = "blocked"
+
+[[steps]]
+id = "verify"
+title = "Verify: {{title}}"
+role = "polecat"
+depends_on = ["fix"]
+instructions = """
+Verify the fix.
+
+1. Run all tests
+2. Manual verification
+3. Check related functionality
+"""
+status = "blocked"
+
+[[steps]]
+id = "merge"
+title = "Merge: {{title}}"
+role = "refinery"
+depends_on = ["verify"]
+instructions = """
+Merge the fix.
+"""
+status = "blocked"

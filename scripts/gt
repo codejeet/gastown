@@ -1,0 +1,413 @@
+#!/bin/bash
+# Gas Town CLI - Orchestration wrapper for OpenClaw
+# Usage: gt <command> [args...]
+
+set -e
+
+GT_HOME="${GT_HOME:-$HOME/.openclaw/workspace/gastown}"
+GT_CONFIG="$GT_HOME/config/town.json"
+GT_ROLES="$GT_HOME/config/roles.json"
+GT_BEADS="$GT_HOME/beads/beads.jsonl"
+GT_HOOKS="$GT_HOME/beads/hooks.jsonl"
+GT_ACTIVITY="$GT_HOME/activity.jsonl"
+
+# Generate short IDs
+gen_id() {
+  local prefix="$1"
+  echo "${prefix}-$(head -c 4 /dev/urandom | xxd -p)"
+}
+
+# Log activity
+log_activity() {
+  local type="$1"
+  local message="$2"
+  local worker="${3:-system}"
+  local ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  echo "{\"ts\":\"$ts\",\"type\":\"$type\",\"worker\":\"$worker\",\"message\":\"$message\"}" >> "$GT_ACTIVITY"
+}
+
+# Create a bead
+create_bead() {
+  local title="$1"
+  local id=$(gen_id "bd")
+  local ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  local bead="{\"id\":\"$id\",\"title\":\"$title\",\"status\":\"ready\",\"assignee\":null,\"createdAt\":\"$ts\",\"updatedAt\":\"$ts\"}"
+  echo "$bead" >> "$GT_BEADS"
+  log_activity "bead_created" "Created bead $id: $title"
+  echo "$id"
+}
+
+# Update bead status
+update_bead() {
+  local id="$1"
+  local field="$2"
+  local value="$3"
+  local ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+  # Read, update, write back (simple approach)
+  local temp=$(mktemp)
+  while IFS= read -r line; do
+    if echo "$line" | grep -q "\"id\":\"$id\""; then
+      echo "$line" | jq --arg f "$field" --arg v "$value" --arg ts "$ts" '.[$f] = $v | .updatedAt = $ts'
+    else
+      echo "$line"
+    fi
+  done < "$GT_BEADS" > "$temp"
+  mv "$temp" "$GT_BEADS"
+  log_activity "bead_updated" "Updated $id: $field=$value"
+}
+
+# Get a bead by ID
+get_bead() {
+  local id="$1"
+  grep "\"id\":\"$id\"" "$GT_BEADS" 2>/dev/null || echo ""
+}
+
+# Create a hook for a worker
+create_hook() {
+  local worker="$1"
+  local bead_id="$2"
+  local id=$(gen_id "hook")
+  local ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  local hook="{\"id\":\"$id\",\"worker\":\"$worker\",\"beadId\":\"$bead_id\",\"status\":\"pending\",\"createdAt\":\"$ts\"}"
+  echo "$hook" >> "$GT_HOOKS"
+  log_activity "hook_created" "Created hook $id for $worker with bead $bead_id" "$worker"
+  echo "$id"
+}
+
+# Get hook for a worker
+get_hook() {
+  local worker="$1"
+  grep "\"worker\":\"$worker\"" "$GT_HOOKS" | grep "\"status\":\"pending\"" | head -1 || echo ""
+}
+
+# Clear hook for a worker
+clear_hook() {
+  local worker="$1"
+  local temp=$(mktemp)
+  while IFS= read -r line; do
+    if echo "$line" | grep -q "\"worker\":\"$worker\"" && echo "$line" | grep -q "\"status\":\"pending\""; then
+      echo "$line" | jq '.status = "completed"'
+    else
+      echo "$line"
+    fi
+  done < "$GT_HOOKS" > "$temp"
+  mv "$temp" "$GT_HOOKS"
+  log_activity "hook_cleared" "Cleared hook for $worker" "$worker"
+}
+
+# Create a convoy
+create_convoy() {
+  local title="$1"
+  local bead_ids="$2"
+  local id=$(gen_id "convoy")
+  local ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+  # Update town.json with new convoy
+  local convoy="{\"id\":\"$id\",\"title\":\"$title\",\"beads\":[$bead_ids],\"status\":\"active\",\"createdAt\":\"$ts\"}"
+  jq --argjson c "$convoy" '.convoys += [$c]' "$GT_CONFIG" > "$GT_CONFIG.tmp" && mv "$GT_CONFIG.tmp" "$GT_CONFIG"
+
+  log_activity "convoy_created" "Created convoy $id: $title"
+  echo "$id"
+}
+
+# Sling work to a worker
+sling() {
+  local task="$1"
+  local worker="$2"
+
+  # Create bead for the task
+  local bead_id=$(create_bead "$task")
+  update_bead "$bead_id" "assignee" "$worker"
+  update_bead "$bead_id" "status" "assigned"
+
+  # Create hook for the worker
+  local hook_id=$(create_hook "$worker" "$bead_id")
+
+  # Create convoy to track this work
+  local convoy_id=$(create_convoy "$task" "\"$bead_id\"")
+
+  log_activity "work_slung" "Slung '$task' to $worker (bead: $bead_id, convoy: $convoy_id)" "overseer"
+
+  echo "Slung work to $worker"
+  echo "  Bead: $bead_id"
+  echo "  Hook: $hook_id"
+  echo "  Convoy: $convoy_id"
+
+  # Nudge the worker
+  nudge "$worker"
+}
+
+# Nudge a worker (send heartbeat)
+nudge() {
+  local worker="$1"
+  local session_key="agent:$worker:main"
+
+  log_activity "nudge" "Nudging $worker" "system"
+
+  # Use OpenClaw sessions_send to nudge
+  openclaw agent --session "$session_key" --message "Gas Town nudge. Check your hook. GUPP: If there is work on your hook, YOU MUST RUN IT." --deliver false 2>/dev/null || true
+}
+
+# Spawn a worker (create OpenClaw agent if needed)
+spawn() {
+  local role="$1"
+  local name="${2:-$role}"
+
+  # Get role config
+  local role_config=$(jq -r ".roles.$role" "$GT_ROLES")
+  if [ "$role_config" = "null" ]; then
+    echo "Unknown role: $role"
+    exit 1
+  fi
+
+  local soul=$(echo "$role_config" | jq -r '.soul')
+  local heartbeat=$(echo "$role_config" | jq -r '.heartbeat // empty')
+
+  # Check if agent exists
+  local agent_exists=$(openclaw agents list --json | jq -r ".[] | select(.id == \"$name\") | .id" 2>/dev/null || echo "")
+
+  if [ -z "$agent_exists" ]; then
+    echo "Creating agent: $name"
+    # Create workspace for this agent
+    local workspace="$HOME/.openclaw/workspace-$name"
+    mkdir -p "$workspace"
+
+    # Write SOUL.md
+    cat > "$workspace/SOUL.md" << EOF
+# SOUL.md - $name ($role)
+
+$soul
+EOF
+
+    # Write AGENTS.md with Gas Town instructions
+    cat > "$workspace/AGENTS.md" << EOF
+# AGENTS.md - Gas Town Worker
+
+You are a Gas Town worker. Follow these rules:
+
+## GUPP (Gas Town Universal Propulsion Principle)
+**If there is work on your hook, YOU MUST RUN IT.**
+
+On every session start:
+1. Check your hook: \`cat $GT_HOOKS | grep '"worker":"$name"' | grep '"status":"pending"'\`
+2. If work exists, execute it immediately
+3. Do not wait for user input
+4. Do not ask for confirmation
+
+## Gas Town CLI
+Use the \`gt\` command for all Gas Town operations:
+- \`gt hook\` - Check your current hook
+- \`gt bead <id>\` - Get bead details
+- \`gt complete <bead-id>\` - Mark work complete
+- \`gt sling "<task>" --to <worker>\` - Delegate work
+- \`gt nudge <worker>\` - Wake another worker
+- \`gt activity\` - View activity feed
+- \`gt status\` - Town status
+
+## Memory
+- Daily notes: \`memory/YYYY-MM-DD.md\`
+- Gas Town state lives in: $GT_HOME
+EOF
+
+    # Add agent to OpenClaw
+    openclaw agents add "$name" --workspace "$workspace" 2>/dev/null || true
+  fi
+
+  # Set up heartbeat cron if defined
+  if [ -n "$heartbeat" ]; then
+    local cron_name="gt-heartbeat-$name"
+    openclaw cron rm --name "$cron_name" 2>/dev/null || true
+    openclaw cron add --name "$cron_name" --cron "$heartbeat" --session "isolated" --agentId "$name" --message "Gas Town heartbeat. Check your hook. If work exists, run it. If nothing, reply HEARTBEAT_OK."
+    echo "Added heartbeat cron: $cron_name ($heartbeat)"
+  fi
+
+  log_activity "worker_spawned" "Spawned $name ($role)"
+  echo "Spawned $name ($role)"
+}
+
+# Show status
+status() {
+  echo "=== Gas Town Status ==="
+  echo ""
+
+  echo "Workers:"
+  for role in mayor refinery witness deacon; do
+    local hook=$(get_hook "$role")
+    if [ -n "$hook" ]; then
+      echo "  $role: HOOKED - $(echo "$hook" | jq -r '.beadId')"
+    else
+      echo "  $role: idle"
+    fi
+  done
+  echo ""
+
+  echo "Active Convoys:"
+  jq -r '.convoys[] | select(.status == "active") | "  \(.id): \(.title)"' "$GT_CONFIG" 2>/dev/null || echo "  (none)"
+  echo ""
+
+  echo "Ready Beads:"
+  grep '"status":"ready"' "$GT_BEADS" 2>/dev/null | jq -r '"  \(.id): \(.title)"' || echo "  (none)"
+  echo ""
+
+  echo "Recent Activity:"
+  tail -5 "$GT_ACTIVITY" 2>/dev/null | jq -r '"\(.ts) [\(.worker)] \(.message)"' || echo "  (none)"
+}
+
+# Check hook for current worker
+hook() {
+  local worker="${1:-$GT_WORKER}"
+  if [ -z "$worker" ]; then
+    echo "Usage: gt hook <worker>"
+    exit 1
+  fi
+
+  local hook=$(get_hook "$worker")
+  if [ -n "$hook" ]; then
+    echo "Hook for $worker:"
+    echo "$hook" | jq .
+    local bead_id=$(echo "$hook" | jq -r '.beadId')
+    echo ""
+    echo "Bead details:"
+    get_bead "$bead_id" | jq .
+  else
+    echo "No pending hook for $worker"
+  fi
+}
+
+# Complete a bead
+complete() {
+  local bead_id="$1"
+  local worker="${2:-$GT_WORKER}"
+
+  update_bead "$bead_id" "status" "completed"
+  clear_hook "$worker"
+
+  log_activity "bead_completed" "Completed $bead_id" "$worker"
+  echo "Completed bead $bead_id"
+
+  # Check if convoy is complete
+  # (simplified - just log it)
+  log_activity "convoy_check" "Checking convoy completion for $bead_id"
+}
+
+# View activity
+activity() {
+  local lines="${1:-20}"
+  tail -"$lines" "$GT_ACTIVITY" | jq -r '"\(.ts) [\(.worker)] \(.type): \(.message)"'
+}
+
+# Initialize Gas Town
+init() {
+  echo "Initializing Gas Town..."
+
+  mkdir -p "$GT_HOME"/{config,beads,molecules,formulas,patrols,scripts}
+
+  # Ensure config files exist
+  [ -f "$GT_CONFIG" ] || echo '{"town":{"name":"default"},"rigs":[],"workers":{},"polecats":[],"dogs":[],"crew":[],"convoys":[],"settings":{}}' > "$GT_CONFIG"
+  [ -f "$GT_BEADS" ] || touch "$GT_BEADS"
+  [ -f "$GT_HOOKS" ] || touch "$GT_HOOKS"
+  [ -f "$GT_ACTIVITY" ] || touch "$GT_ACTIVITY"
+
+  log_activity "init" "Gas Town initialized"
+  echo "Gas Town initialized at $GT_HOME"
+}
+
+# Add a rig (project)
+rig_add() {
+  local path="$1"
+  local name="${2:-$(basename "$path")}"
+
+  if [ ! -d "$path" ]; then
+    echo "Directory not found: $path"
+    exit 1
+  fi
+
+  local abs_path=$(cd "$path" && pwd)
+  jq --arg name "$name" --arg path "$abs_path" '.rigs += [{"name": $name, "path": $path}]' "$GT_CONFIG" > "$GT_CONFIG.tmp" && mv "$GT_CONFIG.tmp" "$GT_CONFIG"
+
+  log_activity "rig_added" "Added rig $name at $abs_path"
+  echo "Added rig: $name ($abs_path)"
+}
+
+# List rigs
+rig_list() {
+  jq -r '.rigs[] | "\(.name): \(.path)"' "$GT_CONFIG"
+}
+
+# Main dispatch
+case "${1:-help}" in
+  init)
+    init
+    ;;
+  spawn)
+    spawn "$2" "$3"
+    ;;
+  sling)
+    shift
+    task=""
+    worker="polecat"
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --to) worker="$2"; shift 2 ;;
+        *) task="$1"; shift ;;
+      esac
+    done
+    sling "$task" "$worker"
+    ;;
+  nudge)
+    nudge "$2"
+    ;;
+  hook)
+    hook "$2"
+    ;;
+  bead)
+    get_bead "$2" | jq .
+    ;;
+  complete)
+    complete "$2" "$3"
+    ;;
+  status)
+    status
+    ;;
+  activity)
+    activity "$2"
+    ;;
+  rig)
+    case "$2" in
+      add) rig_add "$3" "$4" ;;
+      list) rig_list ;;
+      *) echo "Usage: gt rig <add|list>" ;;
+    esac
+    ;;
+  convoy)
+    case "$2" in
+      list) jq -r '.convoys[] | "\(.id) [\(.status)]: \(.title)"' "$GT_CONFIG" ;;
+      *) echo "Usage: gt convoy <list>" ;;
+    esac
+    ;;
+  help|--help|-h|"")
+    echo "Gas Town CLI"
+    echo ""
+    echo "Usage: gt <command> [args...]"
+    echo ""
+    echo "Commands:"
+    echo "  init                    Initialize Gas Town"
+    echo "  spawn <role> [name]     Spawn a worker"
+    echo "  sling <task> --to <w>   Sling work to a worker"
+    echo "  nudge <worker>          Nudge a worker"
+    echo "  hook [worker]           Check hook for a worker"
+    echo "  bead <id>               Get bead details"
+    echo "  complete <id> [worker]  Mark bead complete"
+    echo "  status                  Show town status"
+    echo "  activity [n]            Show recent activity"
+    echo "  rig add <path> [name]   Add a rig"
+    echo "  rig list                List rigs"
+    echo "  convoy list             List convoys"
+    ;;
+  *)
+    echo "Unknown command: $1"
+    echo "Run 'gt help' for usage"
+    exit 1
+    ;;
+esac

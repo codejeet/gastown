@@ -1,0 +1,91 @@
+# Feature Formula
+# A standard workflow for implementing a new feature
+
+[formula]
+name = "feature"
+description = "Standard feature implementation workflow"
+version = "1.0"
+
+# Variables that get substituted when instantiating
+[variables]
+title = { required = true, description = "Feature title" }
+description = { required = false, default = "" }
+rig = { required = false, default = "default" }
+
+# Steps in order
+[[steps]]
+id = "design"
+title = "Design: {{title}}"
+role = "crew"
+instructions = """
+Design the feature: {{title}}
+
+1. Understand the requirements
+2. Research existing patterns in the codebase
+3. Propose an implementation approach
+4. Document in a design doc or comments
+5. Get approval before proceeding
+
+Description: {{description}}
+"""
+status = "ready"
+
+[[steps]]
+id = "implement"
+title = "Implement: {{title}}"
+role = "polecat"
+depends_on = ["design"]
+instructions = """
+Implement the feature as designed.
+
+1. Create necessary files
+2. Write the core logic
+3. Add appropriate comments
+4. Keep changes focused and minimal
+"""
+status = "blocked"
+
+[[steps]]
+id = "test"
+title = "Test: {{title}}"
+role = "polecat"
+depends_on = ["implement"]
+instructions = """
+Test the implementation.
+
+1. Write unit tests
+2. Run existing tests to check for regressions
+3. Manual testing if applicable
+4. Document test coverage
+"""
+status = "blocked"
+
+[[steps]]
+id = "review"
+title = "Review: {{title}}"
+role = "crew"
+depends_on = ["test"]
+instructions = """
+Review the implementation.
+
+1. Check code quality
+2. Verify tests pass
+3. Review for edge cases
+4. Approve or request changes
+"""
+status = "blocked"
+
+[[steps]]
+id = "merge"
+title = "Merge: {{title}}"
+role = "refinery"
+depends_on = ["review"]
+instructions = """
+Merge the approved changes.
+
+1. Ensure all CI checks pass
+2. Merge to main
+3. Clean up feature branch
+4. Update convoy status
+"""
+status = "blocked"

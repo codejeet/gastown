@@ -1,0 +1,138 @@
+# Release Formula
+# Multi-step release process with gates
+
+[formula]
+name = "release"
+description = "Versioned release workflow with quality gates"
+version = "1.0"
+
+[variables]
+version = { required = true, description = "Release version (e.g., 1.2.0)" }
+changelog = { required = false, default = "See commits for changes" }
+
+[[steps]]
+id = "prepare"
+title = "Prepare release {{version}}"
+role = "crew"
+instructions = """
+Prepare for release {{version}}.
+
+1. Verify all planned features are merged
+2. Check CI is green on main
+3. Review changelog
+4. Confirm version number
+"""
+status = "ready"
+
+[[steps]]
+id = "bump-version"
+title = "Bump version to {{version}}"
+role = "polecat"
+depends_on = ["prepare"]
+instructions = """
+Update version numbers.
+
+1. Update package.json / version file
+2. Update any version references
+3. Commit with message "chore: bump version to {{version}}"
+"""
+status = "blocked"
+
+[[steps]]
+id = "changelog"
+title = "Update changelog for {{version}}"
+role = "polecat"
+depends_on = ["bump-version"]
+instructions = """
+Update CHANGELOG.md.
+
+1. Add {{version}} section
+2. Document notable changes
+3. Commit changelog update
+"""
+status = "blocked"
+
+[[steps]]
+id = "build"
+title = "Build release {{version}}"
+role = "polecat"
+depends_on = ["changelog"]
+instructions = """
+Build the release artifacts.
+
+1. Run production build
+2. Verify artifacts are created
+3. Check artifact sizes/integrity
+"""
+status = "blocked"
+
+[[steps]]
+id = "test-release"
+title = "Test release {{version}}"
+role = "polecat"
+depends_on = ["build"]
+instructions = """
+Test the release build.
+
+1. Run full test suite
+2. Run smoke tests on artifacts
+3. Verify no regressions
+"""
+status = "blocked"
+
+[[steps]]
+id = "tag"
+title = "Tag release {{version}}"
+role = "polecat"
+depends_on = ["test-release"]
+instructions = """
+Create git tag.
+
+1. git tag v{{version}}
+2. git push origin v{{version}}
+"""
+status = "blocked"
+
+[[steps]]
+id = "gate-ci"
+title = "Wait for CI: {{version}}"
+role = "witness"
+depends_on = ["tag"]
+gate = true
+gate_type = "ci"
+instructions = """
+Wait for CI to complete on the tag.
+
+1. Monitor GitHub Actions / CI
+2. Gate passes when CI is green
+3. Escalate if CI fails
+"""
+status = "blocked"
+
+[[steps]]
+id = "publish"
+title = "Publish {{version}}"
+role = "polecat"
+depends_on = ["gate-ci"]
+instructions = """
+Publish the release.
+
+1. npm publish / deploy artifacts
+2. Update release page
+3. Verify publication succeeded
+"""
+status = "blocked"
+
+[[steps]]
+id = "announce"
+title = "Announce {{version}}"
+role = "mayor"
+depends_on = ["publish"]
+instructions = """
+Announce the release.
+
+1. Update activity feed
+2. Notify relevant channels
+3. Mark convoy complete
+"""
+status = "blocked"

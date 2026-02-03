@@ -1,0 +1,18 @@
+# Activity and runtime state (user-specific)
+activity.jsonl
+
+# Beads database (user work state)
+beads/*.jsonl
+
+# Active molecules (runtime)
+molecules/*.jsonl
+
+# Research output (example/test runs)
+research/
+
+# Town config with local paths
+config/town.json
+
+# OS files
+.DS_Store
+Thumbs.db

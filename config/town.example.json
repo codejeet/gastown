@@ -1,0 +1,48 @@
+{
+  "town": {
+    "name": "default",
+    "workspace": "/path/to/your/.openclaw/workspace",
+    "beadsPath": "gastown/beads/beads.jsonl",
+    "hooksPath": "gastown/beads/hooks.jsonl",
+    "moleculesPath": "gastown/molecules",
+    "formulasPath": "gastown/formulas",
+    "activityPath": "gastown/activity.jsonl"
+  },
+  "rigs": [],
+  "workers": {
+    "mayor": {
+      "agentId": "mayor",
+      "status": "inactive",
+      "hookId": null,
+      "lastSeen": null
+    },
+    "refinery": {
+      "agentId": "refinery",
+      "status": "inactive",
+      "hookId": null,
+      "lastSeen": null
+    },
+    "witness": {
+      "agentId": "witness",
+      "status": "inactive",
+      "hookId": null,
+      "lastSeen": null
+    },
+    "deacon": {
+      "agentId": "deacon",
+      "status": "inactive",
+      "hookId": null,
+      "lastSeen": null
+    }
+  },
+  "polecats": [],
+  "dogs": [],
+  "crew": [],
+  "convoys": [],
+  "settings": {
+    "autoStartDeacon": true,
+    "polecatPoolSize": 5,
+    "mergeQueueBranch": "main",
+    "activityRetentionDays": 7
+  }
+}
