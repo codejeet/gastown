@@ -22,33 +22,90 @@ Gas Town leverages OpenClaw's session-based architecture to coordinate multiple 
 - [OpenClaw](https://github.com/openclaw/openclaw) installed and configured
 - `jq` for JSON processing
 - Bash shell
+- An LLM API proxy (or direct API access)
 
 ### Installation
+
+**Option 1: Automated Install (Recommended)**
+
+```bash
+# Clone the repo
+git clone https://github.com/codejeet/gastown.git
+cd gastown
+
+# Run the installer
+./install.sh
+
+# With custom LLM proxy settings
+./install.sh \
+  --proxy-url "http://127.0.0.1:3456/v1" \
+  --model-id "claude-opus-4" \
+  --api-key-env "LOCAL_LLM_KEY"
+
+# Dry run to see what would happen
+./install.sh --dry-run
+```
+
+The installer will:
+1. Copy Gas Town scripts to `~/.openclaw/workspace/gastown/`
+2. Register all agents (mayor, polecat-1, refinery, witness, deacon, dog-1, crew-1)
+3. Set up model configs pointing to your LLM proxy
+4. Display heartbeat cron schedules to configure
+
+**Option 2: Manual Install**
 
 1. Copy the `gastown` directory to your OpenClaw workspace:
    ```bash
    cp -r gastown $HOME/.openclaw/workspace/
    ```
 
-2. Initialize Gas Town:
+2. Copy agent configs to OpenClaw agents directory:
    ```bash
-   ./gastown/scripts/gt init
+   cp -r agents/* $HOME/.openclaw/agents/
    ```
 
-3. Start the town (spawn all core workers):
+3. Edit each agent's `models.json` to point to your LLM:
    ```bash
-   ./gastown/scripts/gt-openclaw start
+   # Template is at agents/models.template.json
+   # Replace {{PROXY_URL}}, {{MODEL_ID}}, etc.
    ```
 
-4. Sling your first task:
+4. Restart OpenClaw gateway:
    ```bash
-   ./gastown/scripts/gt sling "Fix the login bug" --to polecat
+   openclaw gateway restart
    ```
 
-5. Monitor progress:
+### Post-Install Setup
+
+1. **Set up heartbeat crons** (in OpenClaw):
+   ```
+   deacon:   */2 * * * *   (every 2 min)
+   witness:  */5 * * * *   (every 5 min)
+   mayor:    */5 * * * *   (every 5 min)
+   refinery: */10 * * * *  (every 10 min)
+   crew-1:   */15 * * * *  (every 15 min)
+   ```
+
+2. **Initialize Gas Town**:
    ```bash
-   ./gastown/scripts/gt status
-   ./gastown/scripts/gt-openclaw dashboard
+   cd ~/.openclaw/workspace/gastown
+   ./scripts/gt init
+   ```
+
+3. **Start the town**:
+   ```bash
+   ./scripts/gt-openclaw start
+   ```
+
+4. **Sling your first task**:
+   ```bash
+   ./scripts/gt sling "Fix the login bug" --to polecat
+   ```
+
+5. **Monitor progress**:
+   ```bash
+   ./scripts/gt status
+   ./scripts/gt-openclaw dashboard
    ```
 
 ## Architecture Overview
@@ -269,6 +326,17 @@ status = "blocked"
 
 ```
 gastown/
+├── install.sh              # Automated installer
+├── README.md               # This file
+├── agents/                 # Agent templates
+│   ├── models.template.json
+│   ├── mayor/SOUL.md
+│   ├── polecat/SOUL.md
+│   ├── refinery/SOUL.md
+│   ├── witness/SOUL.md
+│   ├── deacon/SOUL.md
+│   ├── dog/SOUL.md
+│   └── crew/SOUL.md
 ├── config/
 │   ├── town.json           # Town configuration
 │   └── roles.json          # Role definitions and souls
@@ -285,6 +353,20 @@ gastown/
     ├── gt                  # Basic CLI
     └── gt-openclaw         # OpenClaw integration CLI
 ```
+
+### Installed Agents
+
+After installation, you'll have these agents in `~/.openclaw/agents/`:
+
+| Agent | Heartbeat | Purpose |
+|-------|-----------|---------|
+| `mayor` | */5 * * * * | Coordinator, delegates work |
+| `polecat-1` | — | Ephemeral worker template |
+| `refinery` | */10 * * * * | Merge queue manager |
+| `witness` | */5 * * * * | Worker observer |
+| `deacon` | */2 * * * * | Heartbeat daemon |
+| `dog-1` | — | Deacon helper template |
+| `crew-1` | */15 * * * * | Persistent worker |
 
 ### town.json
 
